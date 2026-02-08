@@ -3,7 +3,7 @@
     <header class="head">
       <div>
         <h2 class="h2">설정(레이아웃 먼저)</h2>
-        <p class="hint">DB 로드는 아직 안 함 · 더미 데이터로 “홈 동작”만 확인</p>
+        <p class="hint">실시간 구독 ON · Home/Settings 동일 done 동기화</p>
       </div>
 
       <div class="actions">
@@ -31,20 +31,22 @@
             </button>
           </div>
 
-          <div class="minihelp" v-if="store.state.loading">데이터 로드 중…</div>
-          <div class="minihelp" v-else-if="store.state.error">로드 오류: {{ store.state.error }}</div>
+          <!-- ✅ 실시간 로드 상태 -->
+          <div class="minihelp" v-if="isLoading">데이터 로드 중…</div>
+          <div class="minihelp" v-else-if="loadError">로드 오류: {{ loadError }}</div>
 
-          <div class="stack2">
+          <!-- ✅ 진행중 -->
+          <div v-if="!isLoading && !loadError" class="stack2">
             <div class="group">
               <div class="group-title pickup">승차</div>
               <div class="stack">
                 <LineItem
-                  v-for="l in dayPickup"
+                  v-for="l in activePickup"
                   :key="l.lineKey"
                   :line="l"
                   @toggle="store.toggleDone"
                 />
-                <Empty v-if="dayPickup.length === 0" />
+                <Empty v-if="activePickup.length === 0" />
               </div>
             </div>
 
@@ -52,15 +54,48 @@
               <div class="group-title dropoff">하차</div>
               <div class="stack">
                 <LineItem
-                  v-for="l in dayDropoff"
+                  v-for="l in activeDropoff"
                   :key="l.lineKey"
                   :line="l"
                   @toggle="store.toggleDone"
                 />
-                <Empty v-if="dayDropoff.length === 0" />
+                <Empty v-if="activeDropoff.length === 0" />
               </div>
             </div>
           </div>
+
+          <!-- ✅ 완료 목록 (승차/하차 분리) -->
+          <h3 v-if="completedLines.length" class="sect done">완료됨</h3>
+
+          <template v-if="completedLines.length">
+            <div class="stack2">
+              <div class="group">
+                <div class="group-title pickup">승차</div>
+                <div class="stack">
+                  <LineItem
+                    v-for="l in completedPickup"
+                    :key="l.lineKey"
+                    :line="l"
+                    @toggle="store.toggleDone"
+                  />
+                  <Empty v-if="completedPickup.length === 0" />
+                </div>
+              </div>
+
+              <div class="group">
+                <div class="group-title dropoff">하차</div>
+                <div class="stack">
+                  <LineItem
+                    v-for="l in completedDropoff"
+                    :key="l.lineKey"
+                    :line="l"
+                    @toggle="store.toggleDone"
+                  />
+                  <Empty v-if="completedDropoff.length === 0" />
+                </div>
+              </div>
+            </div>
+          </template>
 
           <p class="note">다음 단계: 여기에서 “기본노선 편집 UI” 붙일 거야.</p>
         </div>
@@ -146,15 +181,10 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, h, onMounted } from "vue";
+import { computed, reactive, ref, h } from "vue";
 import { useAppStore } from "@/store/jumpersStore";
 
 const store = useAppStore();
-
-onMounted(() => {
-  store.subscribeApp();
-  store.startClock?.();
-});
 
 const weekDays = [
   { key: "mon", label: "월" },
@@ -166,15 +196,11 @@ const weekDays = [
 
 const dayTab = ref(weekDays[0].key);
 
-const dayLines = computed(() => store.linesByDay(dayTab.value));
-const dayPickup = computed(() => dayLines.value.pickup || []);
-const dayDropoff = computed(() => dayLines.value.dropoff || []);
+/** ✅ 로딩/에러 (public+done 둘 다 준비되면 정상 표시) */
+const isLoading = computed(() => !!(store.state.loadingPublic || store.state.loadingDone));
+const loadError = computed(() => store.state.errorPublic || store.state.errorDone || "");
 
-const peopleCount = computed(() => (store.state.data.people || []).length);
-const todayResCount = computed(() =>
-  (store.state.data.reservations || []).filter((r) => r.date === store.todayYmd?.value).length
-);
-
+/** ✅ 날짜 헤더: homeOffsetDays 반영 */
 const headerDate = computed(() => {
   const d0 = store?.homeDate?.value;
   const d = d0 instanceof Date ? d0 : new Date();
@@ -182,6 +208,31 @@ const headerDate = computed(() => {
   return `${d.getUTCFullYear()}년 ${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 (${w})`;
 });
 
+/** ✅ 선택 요일의 라인 (doneMap 반영됨) */
+const dayLines = computed(() => store.linesByDay(dayTab.value, store.todayYmd?.value));
+const allLines = computed(() => {
+  const d = dayLines.value || {};
+  const pu = Array.isArray(d.pickup) ? d.pickup : [];
+  const dof = Array.isArray(d.dropoff) ? d.dropoff : [];
+  return [...pu, ...dof].filter((l) => Array.isArray(l?.names) && l.names.length > 0);
+});
+
+/** ✅ 진행중/완료 분리 → 완료 누르면 자동으로 내려감 */
+const activeLines = computed(() => allLines.value.filter((l) => !l.done));
+const completedLines = computed(() => allLines.value.filter((l) => l.done));
+
+const activePickup = computed(() => activeLines.value.filter((l) => l.type === "pickup"));
+const activeDropoff = computed(() => activeLines.value.filter((l) => l.type === "dropoff"));
+const completedPickup = computed(() => completedLines.value.filter((l) => l.type === "pickup"));
+const completedDropoff = computed(() => completedLines.value.filter((l) => l.type === "dropoff"));
+
+/** ✅ 요약 */
+const peopleCount = computed(() => (store.state.public.people || []).length);
+const todayResCount = computed(() =>
+  (store.state.public.reservations || []).filter((r) => r.date === store.todayYmd?.value).length
+);
+
+/** ✅ 예약 폼 */
 const f = reactive({
   type: "pickup",
   time: "",
@@ -215,7 +266,7 @@ function submit() {
   f.reasonCustom = "";
 }
 
-/* ✅ 홈과 동일: 완료/취소 토글 가능 */
+/** ✅ Home과 동일한 LineItem (시간/장소/완료 한줄 유지) */
 const LineItem = {
   props: { line: { type: Object, required: true } },
   emits: ["toggle"],
@@ -400,6 +451,15 @@ const Empty = {
   background: rgba(255,159,67,0.10);
   box-shadow: 0 0 14px rgba(255,159,67,0.08);
 }
+
+/* ✅ 완료 섹션 타이틀 */
+.sect{
+  margin: 14px 0 8px;
+  font-weight: 900;
+  opacity: 0.92;
+  font-size: 13px;
+}
+.sect.done{ margin-top: 18px; }
 
 /* ✅ 핵심: :deep로 한줄 레이아웃 강제 */
 :deep(.line){

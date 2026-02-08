@@ -21,12 +21,18 @@
   </main>
 </template>
 
-<script setup></script>
+<script setup>
+import { onMounted } from "vue";
+import { useAppStore } from "@/store/jumpersStore";
+
+const store = useAppStore();
+
+onMounted(() => {
+  store.init();
+});
+</script>
 
 <style>
-/* =========================
-   ✅ Pretendard 전역 적용
-   ========================= */
 html,
 body,
 #app {
@@ -37,19 +43,9 @@ body,
     "Noto Sans KR", sans-serif;
 }
 
-/* =========================
-   Base
-   ========================= */
 body {
   background: #0b0f14;
   color: #e9eef5;
-
-  /* ✅ 스크롤은 되되, 스크롤바는 숨김 */
-  overflow: auto;
-  scrollbar-width: none;          /* Firefox */
-}
-body::-webkit-scrollbar {
-  display: none;                  /* Chrome, Edge, Safari */
 }
 
 .page {
@@ -59,9 +55,6 @@ body::-webkit-scrollbar {
   flex-direction: column;
 }
 
-/* =========================
-   Top Bar
-   ========================= */
 .top {
   position: sticky;
   top: 0;
@@ -106,9 +99,6 @@ body::-webkit-scrollbar {
   opacity: 0.75;
 }
 
-/* =========================
-   Nav
-   ========================= */
 .right {
   display: flex;
   gap: 8px;
@@ -125,9 +115,6 @@ body::-webkit-scrollbar {
   font-weight: 600;
 }
 
-/* =========================
-   Content
-   ========================= */
 .content {
   width: 100%;
   flex: 1;

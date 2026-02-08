@@ -1,12 +1,13 @@
 // FILE: src/store/jumpersStore.js
-// ✅ Pinia 없이 동작 (싱글톤)
-// ✅ Firestore: jumpers_app/default
-// ✅ Firestore 데이터 구조 2가지 모두 지원
-//    1) days.{mon|tue|...} = [{id,kind,names,place}, ...]
-//    2) routes/people/reservations = (예전 구조)
-// ✅ 완료(done)는 Firestore doneMap + localStorage fallback
+// ✅ 싱글톤 store
+// ✅ Firestore 3영역 분리(현재 rules에 맞춤)
+//    - jumpers_app/default        : public (days/routes/people/reservations)
+//    - jumpers_state/default      : done (doneMap)
+//    - jumpers_templates/default  : admin (옵션)
+// ✅ Home/Settings 모두 실시간 구독(구독은 전역 1회만)
+// ✅ 완료 토글은 done 문서만 update → payload 작고 빠름
 
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { db } from "@/firebase";
 import {
   doc,
@@ -14,11 +15,20 @@ import {
   setDoc,
   updateDoc,
   deleteField,
+  serverTimestamp,
 } from "firebase/firestore";
 
-/** ✅ RULES 허용 경로 */
-const APP_COL = "jumpers_app";
-const APP_DOC = "default";
+/** =========================
+ *  Firestore Paths (rules에 맞춘 기존 구조)
+ *  ========================= */
+const PUBLIC_COL = "jumpers_app";
+const PUBLIC_DOC = "default";
+
+const DONE_COL = "jumpers_state";
+const DONE_DOC = "default";
+
+const ADMIN_COL = "jumpers_templates";
+const ADMIN_DOC = "default";
 
 /** =========================
  *  KST Utils (안정)
@@ -76,41 +86,22 @@ function splitNames(v) {
     .map((x) => String(x || "").trim())
     .filter(Boolean);
 }
-
-/** =========================
- *  Done(localStorage) fallback
- *  ========================= */
-function loadDoneMapLocal() {
-  try {
-    const raw = localStorage.getItem("jumpers_done_map_v1");
-    const obj = raw ? JSON.parse(raw) : {};
-    return obj && typeof obj === "object" ? obj : {};
-  } catch {
-    return {};
-  }
-}
-function saveDoneMapLocal(doneMap) {
-  try {
-    localStorage.setItem("jumpers_done_map_v1", JSON.stringify(doneMap || {}));
-  } catch {}
-}
 function makeLineKey(type, dayKey, stopId) {
   return `${type}:${dayKey}:${String(stopId || "")}`;
 }
 
 /** =========================
  *  (A) days 구조 파싱
+ *  place 예시:
+ *   - "14:00 [호반정문]" -> time="14:00", place="호반정문"
+ *   - "[1부 하차/레이크시티]" -> time="—", place=원문
  *  ========================= */
 function parseDaysPlace(placeRaw) {
   const s = safeStr(placeRaw).trim();
   if (!s) return { time: "", place: "" };
 
   const m = s.match(/^(\d{1,2}:\d{2})\s*\[(.+?)\]\s*$/);
-  if (m) {
-    const time = m[1];
-    const place = m[2];
-    return { time, place };
-  }
+  if (m) return { time: m[1], place: m[2] };
 
   return { time: "—", place: s };
 }
@@ -119,7 +110,7 @@ function buildLinesFromDaysArray(dayArr, dk, doneMap) {
   const out = [];
   for (const it of safeArr(dayArr)) {
     const id = safeStr(it?.id).trim();
-    const kind = safeStr(it?.kind).trim(); // "pickup" | "dropoff"
+    const kind = safeStr(it?.kind).trim(); // pickup | dropoff
     const names = splitNames(it?.names);
     const { time, place } = parseDaysPlace(it?.place);
 
@@ -137,7 +128,7 @@ function buildLinesFromDaysArray(dayArr, dk, doneMap) {
       place,
       names,
       done: !!doneMap?.[key],
-      hasReservation: false,
+      hasReservation: false, // days 구조는 예약 구분 정보가 없어서 우선 false
     });
   }
 
@@ -154,7 +145,7 @@ function buildLinesFromDaysArray(dayArr, dk, doneMap) {
 }
 
 /** =========================
- *  (B) routes/people/reservations 구조 (기존)
+ *  (B) routes/people/reservations (기존)
  *  ========================= */
 function buildNamesByPlaceFromRoster(people, dayKey, type) {
   const out = new Map();
@@ -186,7 +177,7 @@ function reservationDisplayName(r, peopleById) {
   return safeStr(p?.name).trim();
 }
 
-function buildOverrideByPlaceFromReservations(reservations, todayYmd, dayKey, people) {
+function buildOverrideByPlaceFromReservations(reservations, ymd, dk, people) {
   const outPickup = new Map();
   const outDropoff = new Map();
 
@@ -194,10 +185,10 @@ function buildOverrideByPlaceFromReservations(reservations, todayYmd, dayKey, pe
   for (const p of safeArr(people)) peopleById.set(String(p?.id || ""), p);
 
   for (const r of safeArr(reservations)) {
-    if (safeStr(r?.date) !== todayYmd) continue;
+    if (safeStr(r?.date) !== ymd) continue;
     const kind = safeStr(r?.kind);
     if (kind === "결석") continue;
-    if (!dayKey) continue;
+    if (!dk) continue;
 
     const nm = reservationDisplayName(r, peopleById);
     if (!nm) continue;
@@ -221,7 +212,12 @@ function buildOverrideByPlaceFromReservations(reservations, todayYmd, dayKey, pe
 function buildLinesFromRoutes(routesForDay, people, reservations, ymd, dk, doneMap) {
   const rosterPickup = buildNamesByPlaceFromRoster(people, dk, "pickup");
   const rosterDropoff = buildNamesByPlaceFromRoster(people, dk, "dropoff");
-  const { outPickup, outDropoff } = buildOverrideByPlaceFromReservations(reservations, ymd, dk, people);
+  const { outPickup, outDropoff } = buildOverrideByPlaceFromReservations(
+    reservations,
+    ymd,
+    dk,
+    people
+  );
 
   const pickup = safeArr(routesForDay?.pickup)
     .map((s) => {
@@ -289,10 +285,14 @@ export function useAppStore() {
   if (_store) return _store;
 
   const state = reactive({
-    loading: true,
-    error: "",
-    data: {
-      ui: { activeTab: "all" },
+    loadingPublic: true,
+    loadingDone: true,
+    loadingAdmin: true,
+    errorPublic: "",
+    errorDone: "",
+    errorAdmin: "",
+
+    public: {
       days: { mon: [], tue: [], wed: [], thu: [], fri: [] },
       routes: {
         mon: { pickup: [], dropoff: [] },
@@ -303,12 +303,18 @@ export function useAppStore() {
       },
       people: [],
       reservations: [],
-      // ✅ Firestore에 저장될 doneMap (없으면 빈 객체)
-      doneMap: {},
+    },
+
+    done: {
+      doneMap: {}, // { [lineKey]: ts }
+    },
+
+    admin: {
+      ui: {},
     },
   });
 
-  // clock
+  /** clock */
   const kstNow = ref(nowKstDate());
   let clockTimer = null;
 
@@ -323,127 +329,169 @@ export function useAppStore() {
     clockTimer = null;
   }
 
-  // ✅ Home 기준 (테스트용: 내일)
+  /** Home 기준 (테스트: 월요일 땡기기 유지) */
   const homeOffsetDays = ref(1);
   const homeDate = computed(() => addKstDays(kstNow.value, homeOffsetDays.value));
+  const todayKey = computed(() => kstDayKey(homeDate.value));
+  const todayYmd = computed(() => kstYmd(homeDate.value));
 
-  // doneMap: Firestore 우선, 없으면 localStorage fallback
-  const doneMapLocal = ref(loadDoneMapLocal());
-  const doneMap = computed(() => {
-    const remote = state.data.doneMap;
-    if (remote && typeof remote === "object" && Object.keys(remote).length) return remote;
-    return doneMapLocal.value || {};
-  });
+  /** 구독(전역 1회) */
+  let unsubPublic = null;
+  let unsubDone = null;
+  let unsubAdmin = null;
+  let inited = false;
 
-  function saveDoneMapLocalIfNeeded(next) {
-    doneMapLocal.value = next || {};
-    saveDoneMapLocal(doneMapLocal.value);
-  }
+  function subscribeAll() {
+    if (inited) return;
+    inited = true;
 
-  // firestore realtime
-  let unsub = null;
+    // 1) public: jumpers_app/default
+    state.loadingPublic = true;
+    state.errorPublic = "";
+    const refPublic = doc(db, PUBLIC_COL, PUBLIC_DOC);
 
-  function subscribeApp() {
-    if (unsub) return;
-
-    state.loading = true;
-    state.error = "";
-
-    const refDoc = doc(db, APP_COL, APP_DOC);
-
-    unsub = onSnapshot(
-      refDoc,
+    unsubPublic = onSnapshot(
+      refPublic,
       (snap) => {
-        state.loading = false;
+        state.loadingPublic = false;
         if (!snap.exists()) return;
-
         const data = snap.data() || {};
 
-        if (data.days && typeof data.days === "object") state.data.days = data.days;
-        if (data.routes && typeof data.routes === "object") state.data.routes = data.routes;
+        // days 우선
+        if (data.days && typeof data.days === "object") state.public.days = data.days;
+        if (data.routes && typeof data.routes === "object") state.public.routes = data.routes;
 
-        state.data.people = Array.isArray(data.people) ? data.people : [];
-        state.data.reservations = Array.isArray(data.reservations) ? data.reservations : [];
-
-        // ✅ doneMap도 실시간으로 받기
-        state.data.doneMap = data.doneMap && typeof data.doneMap === "object" ? data.doneMap : {};
+        state.public.people = Array.isArray(data.people) ? data.people : [];
+        state.public.reservations = Array.isArray(data.reservations) ? data.reservations : [];
       },
       (err) => {
-        state.loading = false;
-        state.error = err?.message || String(err);
-        console.error("[Firestore] subscribeApp error:", err);
+        state.loadingPublic = false;
+        state.errorPublic = err?.message || String(err);
+        console.error("[Firestore] public subscribe error:", err);
+      }
+    );
+
+    // 2) done: jumpers_state/default
+    state.loadingDone = true;
+    state.errorDone = "";
+    const refDone = doc(db, DONE_COL, DONE_DOC);
+
+    unsubDone = onSnapshot(
+      refDone,
+      (snap) => {
+        state.loadingDone = false;
+        if (!snap.exists()) {
+          state.done.doneMap = {};
+          return;
+        }
+        const data = snap.data() || {};
+        state.done.doneMap =
+          data.doneMap && typeof data.doneMap === "object" ? data.doneMap : {};
+      },
+      (err) => {
+        state.loadingDone = false;
+        state.errorDone = err?.message || String(err);
+        console.error("[Firestore] done subscribe error:", err);
+      }
+    );
+
+    // 3) admin: jumpers_templates/default (옵션)
+    state.loadingAdmin = true;
+    state.errorAdmin = "";
+    const refAdmin = doc(db, ADMIN_COL, ADMIN_DOC);
+
+    unsubAdmin = onSnapshot(
+      refAdmin,
+      (snap) => {
+        state.loadingAdmin = false;
+        if (!snap.exists()) return;
+        const data = snap.data() || {};
+        state.admin.ui = data.ui && typeof data.ui === "object" ? data.ui : {};
+      },
+      (err) => {
+        state.loadingAdmin = false;
+        state.errorAdmin = err?.message || String(err);
+        console.error("[Firestore] admin subscribe error:", err);
       }
     );
   }
 
-  function unsubscribeApp() {
-    if (unsub) unsub();
-    unsub = null;
+  function unsubscribeAll() {
+    if (unsubPublic) unsubPublic();
+    if (unsubDone) unsubDone();
+    if (unsubAdmin) unsubAdmin();
+    unsubPublic = null;
+    unsubDone = null;
+    unsubAdmin = null;
+    inited = false;
   }
 
-  // ✅ Home 기준 키/날짜
-  const todayKey = computed(() => kstDayKey(homeDate.value));
-  const todayYmd = computed(() => kstYmd(homeDate.value));
+  /** 라인 빌드(홈/설정 공용)
+   *  - ymdOverride: routes 구조에서 reservation 덮어쓰기 판단에 사용
+   */
+  function linesByDay(dk, ymdOverride = "") {
+    const dkSafe = String(dk || "");
+    if (!dkSafe) return { pickup: [], dropoff: [] };
 
-  // ✅ 공통: 특정 요일 라인 생성 (설정에서 사용)
-  function linesByDay(dk) {
-    if (!dk) return { pickup: [], dropoff: [] };
+    const ymd = ymdOverride || todayYmd.value;
+    const doneMap = state.done.doneMap || {};
 
-    const daysArr = state.data.days?.[dk];
+    // 1) days 우선
+    const daysArr = state.public.days?.[dkSafe];
     if (Array.isArray(daysArr) && daysArr.length) {
-      return buildLinesFromDaysArray(daysArr, dk, doneMap.value);
+      return buildLinesFromDaysArray(daysArr, dkSafe, doneMap);
     }
 
-    // fallback: routes 구조
-    const ymd = todayYmd.value; // (routes/예약 구조는 date가 필요해서, 테스트는 home 기준 date를 씀)
-    const routesForDay = state.data.routes?.[dk] || { pickup: [], dropoff: [] };
-    return buildLinesFromRoutes(routesForDay, state.data.people, state.data.reservations, ymd, dk, doneMap.value);
+    // 2) fallback routes
+    const routesForDay = state.public.routes?.[dkSafe] || { pickup: [], dropoff: [] };
+    return buildLinesFromRoutes(
+      routesForDay,
+      state.public.people,
+      state.public.reservations,
+      ymd,
+      dkSafe,
+      doneMap
+    );
   }
 
-  // ✅ Home용 todayLines
   const todayLines = computed(() => {
     const dk = todayKey.value;
     if (!dk) return { pickup: [], dropoff: [] };
-    return linesByDay(dk);
+    return linesByDay(dk, todayYmd.value);
   });
 
-  // ✅ 핵심: 완료 토글을 Firestore로 저장 (설정/홈 동기화)
+  /** 완료 토글: jumpers_state/default doneMap만 업데이트 */
   async function toggleDone(lineKey) {
     const k = String(lineKey || "");
     if (!k) return;
 
-    const refDoc = doc(db, APP_COL, APP_DOC);
+    const refDone = doc(db, DONE_COL, DONE_DOC);
     const fieldPath = `doneMap.${k}`;
-
-    const isDone = !!state.data.doneMap?.[k];
+    const isDone = !!state.done.doneMap?.[k];
 
     try {
-      // doneMap이 아직 문서에 없을 수도 있으니 setDoc(merge)로 안전하게 만들고 update도 가능
       if (isDone) {
-        await updateDoc(refDoc, { [fieldPath]: deleteField() });
+        await updateDoc(refDone, {
+          [fieldPath]: deleteField(),
+          updatedAt: serverTimestamp(),
+        });
       } else {
-        await setDoc(refDoc, { doneMap: { [k]: Date.now() } }, { merge: true });
+        await setDoc(
+          refDone,
+          { doneMap: { [k]: Date.now() }, updatedAt: serverTimestamp() },
+          { merge: true }
+        );
       }
     } catch (e) {
-      // Firestore 실패 시 최소한 로컬로라도 동작 (디버그/오프라인 대비)
-      const local = { ...(doneMapLocal.value || {}) };
-      if (local[k]) delete local[k];
-      else local[k] = Date.now();
-      saveDoneMapLocalIfNeeded(local);
-
       console.error("[Firestore] toggleDone error:", e);
     }
   }
 
-  onMounted(() => {
+  /** 앱 시작용 init (App.vue에서 1회 호출) */
+  function init() {
     startClock();
-    subscribeApp();
-  });
-
-  onBeforeUnmount(() => {
-    stopClock();
-    unsubscribeApp();
-  });
+    subscribeAll();
+  }
 
   _store = {
     state,
@@ -452,22 +500,20 @@ export function useAppStore() {
     startClock,
     stopClock,
 
-    // 홈 기준
+    init,
+    subscribeAll,
+    unsubscribeAll,
+
     homeOffsetDays,
     homeDate,
+
     todayKey,
     todayYmd,
     todayLines,
 
-    // 설정용
     linesByDay,
 
-    // 완료
     toggleDone,
-
-    // 구독
-    subscribeApp,
-    unsubscribeApp,
   };
 
   return _store;
