@@ -43,6 +43,13 @@ body,
 body {
   background: #0b0f14;
   color: #e9eef5;
+
+  /* ✅ 스크롤은 되되, 스크롤바는 숨김 */
+  overflow: auto;
+  scrollbar-width: none;          /* Firefox */
+}
+body::-webkit-scrollbar {
+  display: none;                  /* Chrome, Edge, Safari */
 }
 
 .page {
@@ -89,7 +96,7 @@ body {
 .title {
   margin: 0;
   font-size: 16px;
-  font-weight: 800; /* Pretendard 추천 헤더 굵기 */
+  font-weight: 800;
 }
 
 .sub {

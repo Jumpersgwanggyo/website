@@ -7,31 +7,62 @@
       </div>
 
       <div class="actions">
-        <button class="btn" @click="store.scheduleSave()">로컬 저장</button>
-        <button class="btn danger" @click="store.resetToDummy()">더미로 초기화</button>
+        <button class="btn" @click="store.scheduleSave?.()">로컬 저장</button>
+        <button class="btn danger" @click="store.resetToDummy?.()">더미로 초기화</button>
       </div>
     </header>
 
     <div class="cols">
       <section class="card">
-        <div class="card-title">기본노선(요약)</div>
+        <!-- ✅ 제목: homeOffsetDays 반영된 날짜 -->
+        <div class="card-title">차량목록 ({{ headerDate }})</div>
+
         <div class="box">
-          <div class="kv">
-            <div class="k">오늘 요일</div>
-            <div class="v">{{ store.todayKey.value }}</div>
-          </div>
-          <div class="kv">
-            <div class="k">승차 라인</div>
-            <div class="v">{{ pickupCount }}</div>
-          </div>
-          <div class="kv">
-            <div class="k">하차 라인</div>
-            <div class="v">{{ dropoffCount }}</div>
+          <div class="wtabs" role="tablist" aria-label="요일 선택">
+            <button
+              v-for="d in weekDays"
+              :key="d.key"
+              class="wtab"
+              :class="{ on: dayTab === d.key }"
+              type="button"
+              @click="dayTab = d.key"
+            >
+              {{ d.label }}
+            </button>
           </div>
 
-          <p class="note">
-            다음 단계: 여기에서 “기본노선 편집 UI” 붙일 거야.
-          </p>
+          <div class="minihelp" v-if="store.state.loading">데이터 로드 중…</div>
+          <div class="minihelp" v-else-if="store.state.error">로드 오류: {{ store.state.error }}</div>
+
+          <div class="stack2">
+            <div class="group">
+              <div class="group-title pickup">승차</div>
+              <div class="stack">
+                <LineItem
+                  v-for="l in dayPickup"
+                  :key="l.lineKey"
+                  :line="l"
+                  @toggle="store.toggleDone"
+                />
+                <Empty v-if="dayPickup.length === 0" />
+              </div>
+            </div>
+
+            <div class="group">
+              <div class="group-title dropoff">하차</div>
+              <div class="stack">
+                <LineItem
+                  v-for="l in dayDropoff"
+                  :key="l.lineKey"
+                  :line="l"
+                  @toggle="store.toggleDone"
+                />
+                <Empty v-if="dayDropoff.length === 0" />
+              </div>
+            </div>
+          </div>
+
+          <p class="note">다음 단계: 여기에서 “기본노선 편집 UI” 붙일 거야.</p>
         </div>
       </section>
 
@@ -47,9 +78,7 @@
             <div class="v">예약이 있으면 기본 명단 무시</div>
           </div>
 
-          <p class="note">
-            다음 단계: “이름 기준으로 요일별 승/하차 장소 지정” UI.
-          </p>
+          <p class="note">다음 단계: “이름 기준으로 요일별 승/하차 장소 지정” UI.</p>
         </div>
       </section>
 
@@ -117,17 +146,41 @@
 </template>
 
 <script setup>
-import { computed, reactive } from "vue";
+import { computed, reactive, ref, h, onMounted } from "vue";
 import { useAppStore } from "@/store/jumpersStore";
 
 const store = useAppStore();
 
-const pickupCount = computed(() => (store.state.data.routes?.[store.todayKey.value]?.pickup || []).length);
-const dropoffCount = computed(() => (store.state.data.routes?.[store.todayKey.value]?.dropoff || []).length);
+onMounted(() => {
+  store.subscribeApp();
+  store.startClock?.();
+});
+
+const weekDays = [
+  { key: "mon", label: "월" },
+  { key: "tue", label: "화" },
+  { key: "wed", label: "수" },
+  { key: "thu", label: "목" },
+  { key: "fri", label: "금" },
+];
+
+const dayTab = ref(weekDays[0].key);
+
+const dayLines = computed(() => store.linesByDay(dayTab.value));
+const dayPickup = computed(() => dayLines.value.pickup || []);
+const dayDropoff = computed(() => dayLines.value.dropoff || []);
+
 const peopleCount = computed(() => (store.state.data.people || []).length);
 const todayResCount = computed(() =>
-  (store.state.data.reservations || []).filter((r) => r.date === store.todayYmd.value).length
+  (store.state.data.reservations || []).filter((r) => r.date === store.todayYmd?.value).length
 );
+
+const headerDate = computed(() => {
+  const d0 = store?.homeDate?.value;
+  const d = d0 instanceof Date ? d0 : new Date();
+  const w = ["일", "월", "화", "수", "목", "금", "토"][d.getUTCDay()];
+  return `${d.getUTCFullYear()}년 ${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 (${w})`;
+});
 
 const f = reactive({
   type: "pickup",
@@ -147,8 +200,8 @@ function submit() {
   const names = rawNames.split(",").map((s) => s.trim()).filter(Boolean);
   const reason = f.reason === "사용자지정" ? (f.reasonCustom || "").trim() : f.reason;
 
-  store.addReservation({
-    date: store.todayYmd.value,
+  store.addReservation?.({
+    date: store.todayYmd?.value,
     type: f.type,
     time,
     place,
@@ -161,9 +214,59 @@ function submit() {
   f.names = "";
   f.reasonCustom = "";
 }
+
+/* ✅ 홈과 동일: 완료/취소 토글 가능 */
+const LineItem = {
+  props: { line: { type: Object, required: true } },
+  emits: ["toggle"],
+  setup(props, { emit }) {
+    return () => {
+      const line = props.line || {};
+      const done = !!line.done;
+      const names = Array.isArray(line.names) ? line.names : [];
+
+      return h("article", { class: ["line", done ? "is-done" : ""] }, [
+        h("div", { class: "line-top" }, [
+          h("div", { class: "time" }, String(line.time || "")),
+          h("div", { class: "place" }, [
+            h("span", { class: "place-text" }, String(line.place || "")),
+            line.hasReservation ? h("span", { class: "badge" }, "예약") : null,
+          ]),
+          h(
+            "button",
+            {
+              class: ["done-btn", done ? "cancel" : ""],
+              type: "button",
+              title: done ? "완료취소" : "완료",
+              "aria-label": done ? "완료취소" : "완료",
+              onClick: () => emit("toggle", line.lineKey),
+            },
+            done ? "취소" : "완료"
+          ),
+        ]),
+        h("div", { class: "names-card" }, [
+          names.length
+            ? h(
+                "div",
+                { class: "names" },
+                names.map((n) => h("span", { class: "name", key: String(n) }, String(n)))
+              )
+            : h("span", { class: "empty2" }, "—"),
+        ]),
+      ]);
+    };
+  },
+};
+
+const Empty = {
+  setup() {
+    return () => h("div", { class: "empty" }, "라인 없음");
+  },
+};
 </script>
 
 <style scoped>
+/* (기존 스타일 유지) */
 .layout{ display:grid; gap: 12px; }
 
 .head{
@@ -249,5 +352,171 @@ function submit() {
 
 @media (min-width: 1100px) {
   .cols{ grid-template-columns: 1fr 1fr 1fr; align-items: start; }
+}
+
+.wtabs{ display:flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.wtab{
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.03);
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.9;
+}
+.wtab.on{
+  background: rgba(0,200,120,0.12);
+  border-color: rgba(0,200,120,0.35);
+  color: #6cffc0;
+  opacity: 1;
+}
+
+.stack2{ display:grid; gap: 12px; }
+.stack{ display:flex; flex-direction:column; gap: 10px; }
+
+.group{ margin-top: 2px; }
+.group-title{
+  width: 100%;
+  display:block;
+  box-sizing:border-box;
+  text-align:left;
+  padding: 10px 12px;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: 1000;
+  letter-spacing: 0.6px;
+  margin: 4px 0 10px;
+}
+.group-title.pickup{
+  color: #6cffc0;
+  border: 1px solid rgba(0,200,120,0.35);
+  background: rgba(0,200,120,0.10);
+  box-shadow: 0 0 14px rgba(0,200,120,0.08);
+}
+.group-title.dropoff{
+  color: #ffd7a6;
+  border: 1px solid rgba(255,159,67,0.45);
+  background: rgba(255,159,67,0.10);
+  box-shadow: 0 0 14px rgba(255,159,67,0.08);
+}
+
+/* ✅ 핵심: :deep로 한줄 레이아웃 강제 */
+:deep(.line){
+  display:grid;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.14);
+}
+:deep(.line.is-done){ opacity: 0.6; }
+
+:deep(.line-top){
+  display: grid !important;
+  grid-template-columns: 160px 1fr 52px !important;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+:deep(.time){
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+}
+
+:deep(.place){
+  display:flex;
+  gap: 8px;
+  align-items:center;
+  min-width: 0;
+  overflow:hidden;
+}
+:deep(.place-text){
+  font-size: 13px;
+  opacity: 0.9;
+  font-weight: 700;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+:deep(.badge){
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,196,92,0.25);
+  background: rgba(255,196,92,0.16);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+:deep(.names-card){
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+  padding: 10px;
+}
+:deep(.names){ display:flex; gap: 6px; flex-wrap: wrap; }
+:deep(.name){
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  white-space: nowrap;
+}
+:deep(.empty2){ font-size: 12px; opacity: 0.55; }
+
+/* ✅ Home과 동일: 완료/취소 스타일 */
+:deep(.done-btn){
+  width: 52px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+
+  font-size: 16px;
+  padding: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 200, 120, 0.35);
+  background: rgba(0, 200, 120, 0.12);
+  color: #6cffc0;
+  cursor: pointer;
+  font-weight: 900;
+  line-height: 1;
+}
+:deep(.done-btn:hover){
+  background: rgba(0, 200, 120, 0.18);
+}
+:deep(.done-btn.cancel){
+  border-color: rgba(255, 159, 67, 0.45);
+  background: rgba(255, 159, 67, 0.14);
+  color: #ffd7a6;
+  opacity: 1;
+}
+
+.empty{
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px dashed rgba(255,255,255,0.18);
+  opacity: 0.75;
+  text-align: center;
+  background: rgba(0,0,0,0.10);
+}
+
+@media (max-width: 720px) {
+  :deep(.line-top){
+    grid-template-columns: 64px 1fr 44px !important;
+    gap: 10px;
+  }
+  :deep(.done-btn){
+    width: 44px;
+    height: 40px;
+    font-size: 14px;
+  }
 }
 </style>
