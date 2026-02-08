@@ -10,7 +10,7 @@
       <template v-else>
         <template v-if="tab === 'roster'">
           <!-- =========================
-               선택된 사람: 이름 + 요일별 장소/시간
+               선택된 사람: 이름 + 삭제 + 요일별 장소/시간
                ========================= -->
           <template v-if="selectedPersonId">
             <div class="namebar">
@@ -22,6 +22,7 @@
                 @keydown.enter.prevent="commitName"
                 @blur="commitName"
               />
+              <button class="btndelperson" type="button" @click="removeSelectedPerson">삭제</button>
             </div>
 
             <div class="daylist">
@@ -79,9 +80,6 @@
                선택 없을 때: 기존 전체 명단 그리드
                ========================= -->
           <template v-else>
-            <div class="subhead">월~금 장소 체크</div>
-            <div class="minihelp">각 사람의 요일별 승/하차 장소(people.assign)를 그대로 보여줘.</div>
-
             <div class="gridwrap">
               <div class="gridhead">
                 <div class="g-name">이름</div>
@@ -113,197 +111,7 @@
             <div class="sep"></div>
           </template>
 
-          <!-- =========================
-               ✅ 예약 현황
-               ========================= -->
-          <div class="subhead">예약 현황</div>
-
-          <div class="resbox">
-            <template v-if="selectedPersonId">
-              <div class="topbar">
-                <div class="toprow">
-                  <span class="chip k">사유</span>
-                  <select class="selDark" v-model="raReason">
-                    <option value="supplement">보강</option>
-                    <option value="timeChange">시간변경</option>
-                    <option value="custom">사용자 텍스트 저장</option>
-                    <option value="absent">결석</option>
-                  </select>
-                </div>
-
-                <div class="toprow">
-                  <span class="chip k">날짜</span>
-                  <input class="dateInp" type="date" v-model="resDateIso" />
-                  <span class="chip k">요일</span>
-                  <span class="daypill">{{ dayLabelByKey(resDayKey) }}</span>
-                </div>
-              </div>
-
-              <div v-if="raReason === 'absent'" class="absentNote">
-                결석은 예약 추가/저장/표시에서 완전 제외.
-              </div>
-
-              <div v-else class="resAddDual">
-                <div class="dualrow">
-                  <div class="cell">
-                    <div class="lab">승차 장소</div>
-                    <select class="selDark" v-model="raPickupPlace" @change="syncAddTimes">
-                      <option value="">—</option>
-                      <option v-for="opt in pickupPlaceOptions" :key="'apu-' + opt" :value="opt">
-                        {{ opt }}
-                      </option>
-                    </select>
-                    <div class="timePill">{{ raPickupTime || "—" }}</div>
-                  </div>
-
-                  <div class="cell">
-                    <div class="lab">하차 장소</div>
-                    <select class="selDark" v-model="raDropoffPlace" @change="syncAddTimes">
-                      <option value="">—</option>
-                      <option v-for="opt in dropoffPlaceOptions" :key="'ado-' + opt" :value="opt">
-                        {{ opt }}
-                      </option>
-                    </select>
-                    <div class="timePill">{{ raDropoffTime || "—" }}</div>
-                  </div>
-                </div>
-
-                <div class="dualrow" v-if="raReason === 'custom'">
-                  <div class="cell full">
-                    <div class="lab">텍스트</div>
-                    <input class="inpDark" v-model.trim="raText" placeholder="텍스트" />
-                  </div>
-                </div>
-
-                <div class="dualrow actions">
-                  <button class="btnAdd" type="button" @click="addReservationDual">추가</button>
-                </div>
-
-                <div class="minihelp2">승차/하차 둘 중 하나만 선택해도 저장되고, 둘 다 선택도 가능해.</div>
-              </div>
-            </template>
-
-            <div class="kv">
-              <div class="k">총 예약 수</div>
-              <div class="v">{{ reservationsForDayFiltered.length }}</div>
-            </div>
-
-            <template v-if="selectedPersonId">
-              <div v-if="reservationsForDayFiltered.length === 0" class="emptymini">해당 날짜 예약이 없어.</div>
-
-              <div v-else class="resEditList">
-                <div v-for="(r, idx) in reservationsForDayFiltered" :key="r.id || ('r-' + idx)" class="resEditRowDual">
-                  <div class="rowTop">
-                    <select
-                      class="selDark"
-                      :value="normalizeReason(r)"
-                      @change="updateReservationDualField(idx, 'reason', $event.target.value)"
-                    >
-                      <option value="supplement">보강</option>
-                      <option value="timeChange">시간변경</option>
-                      <option value="custom">사용자 텍스트 저장</option>
-                    </select>
-
-                    <button class="btnDel" type="button" @click="removeReservation(idx)">삭제</button>
-                  </div>
-
-                  <div class="dualrow">
-                    <div class="cell">
-                      <div class="lab">승차 장소</div>
-                      <select
-                        class="selDark"
-                        :value="normalizePickupPlace(r)"
-                        @change="updateReservationDualPlace(idx, 'pickup', $event.target.value)"
-                      >
-                        <option value="">—</option>
-                        <option v-for="opt in pickupPlaceOptions" :key="'epu-' + idx + '-' + opt" :value="opt">
-                          {{ opt }}
-                        </option>
-                      </select>
-                      <div class="timePill">{{ normalizePickupTime(r) || "—" }}</div>
-                    </div>
-
-                    <div class="cell">
-                      <div class="lab">하차 장소</div>
-                      <select
-                        class="selDark"
-                        :value="normalizeDropoffPlace(r)"
-                        @change="updateReservationDualPlace(idx, 'dropoff', $event.target.value)"
-                      >
-                        <option value="">—</option>
-                        <option v-for="opt in dropoffPlaceOptions" :key="'edo-' + idx + '-' + opt" :value="opt">
-                          {{ opt }}
-                        </option>
-                      </select>
-                      <div class="timePill">{{ normalizeDropoffTime(r) || "—" }}</div>
-                    </div>
-                  </div>
-
-                  <div class="dualrow" v-if="normalizeReason(r) === 'custom'">
-                    <div class="cell full">
-                      <div class="lab">텍스트</div>
-                      <input
-                        class="inpDark"
-                        :value="normalizeText(r)"
-                        placeholder="텍스트"
-                        @input="updateReservationDualField(idx, 'text', $event.target.value)"
-                        @blur="commitReservationsImmediate"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </template>
-
-            <template v-else>
-              <div class="reslist" v-if="Object.keys(reservationsByPersonFiltered).length">
-                <div v-for="(items, pid) in reservationsByPersonFiltered" :key="'rbp-' + pid" class="rescard">
-                  <div class="reshead">
-                    <div class="resname">
-                      {{ personNameById(pid) }}
-                      <span class="rescount">{{ items.length }}</span>
-                    </div>
-                    <div class="respid">ID: {{ pid }}</div>
-                  </div>
-
-                  <div class="resitems">
-                    <div v-for="(x, i) in items" :key="'it-' + pid + '-' + i" class="resitem">
-                      <span class="r-badge">{{ x.kind || "예약" }}</span>
-                      <span class="r-text">
-                        <b>{{ x.type === "dropoff" ? "하차" : "승차" }}</b>
-                        · {{ x.time || "—" }} · {{ x.place || "—" }}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div v-else class="emptymini">해당 조건의 예약이 없어.</div>
-
-              <div v-if="tempReservations.length" class="sep2"></div>
-
-              <div v-if="tempReservations.length">
-                <div class="subhead" style="margin-top: 0;">체험/임시 예약</div>
-                <div class="reslist">
-                  <div v-for="(r, idx) in tempReservations" :key="'tmp-' + idx" class="rescard">
-                    <div class="reshead">
-                      <div class="resname">{{ r.tempName || "체험" }}</div>
-                      <div class="respid">임시</div>
-                    </div>
-                    <div class="resitems">
-                      <div class="resitem">
-                        <span class="r-badge">{{ r.kind || r.reason || "체험" }}</span>
-                        <span class="r-text">
-                          <b>{{ r.type === "dropoff" ? "하차" : "승차" }}</b>
-                          · {{ r.time || "—" }} · {{ r.place || "—" }}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </template>
-          </div>
+          <!-- ✅ 하단 "예약 현황" 영역은 완전 제거 -->
         </template>
 
         <template v-else>
@@ -325,6 +133,8 @@ const props = defineProps({
   selectedPersonId: { type: String, default: "" },
 });
 
+const emit = defineEmits(["deleted-person"]);
+
 const store = useAppStore();
 
 const isLoading = computed(() => !!(store.state.loadingPublic || store.state.loadingDone));
@@ -335,81 +145,19 @@ function safeStr(v) {
   return typeof v === "string" ? v : "";
 }
 
-/** ✅ 핵심 수정: 요일 key를 mon~fri로 강제 정규화 */
+/** ✅ 요일 key를 mon~fri로 강제 정규화 */
 function dayKeyNorm(raw) {
   const s = safeStr(raw).trim().toLowerCase();
   if (!s) return "mon";
-
-  // 이미 영문키면 그대로
   if (s === "mon" || s === "tue" || s === "wed" || s === "thu" || s === "fri") return s;
 
-  // 한글 라벨이 들어오는 경우 정규화
   const map = { "월": "mon", "화": "tue", "수": "wed", "목": "thu", "금": "fri" };
-  if (map[safeStr(raw).trim()]) return map[safeStr(raw).trim()];
-
+  const k = safeStr(raw).trim();
+  if (map[k]) return map[k];
   return "mon";
 }
 
 const tab = ref("roster");
-
-/* date normalize */
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-function parseYmdToDate(ymdRaw) {
-  const s = safeStr(ymdRaw).trim();
-  if (!s) return null;
-
-  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)) {
-    const [y, m, d] = s.split("-").map((x) => parseInt(x, 10));
-    return new Date(y, m - 1, d);
-  }
-  if (/^\d{4}\.\d{1,2}\.\d{1,2}$/.test(s)) {
-    const [y, m, d] = s.split(".").map((x) => parseInt(x, 10));
-    return new Date(y, m - 1, d);
-  }
-  if (/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(s)) {
-    const [y, m, d] = s.split("/").map((x) => parseInt(x, 10));
-    return new Date(y, m - 1, d);
-  }
-
-  const dt = new Date(s);
-  if (Number.isNaN(dt.getTime())) return null;
-  return dt;
-}
-function normIsoDate(ymdRaw) {
-  const dt = parseYmdToDate(ymdRaw);
-  if (!dt) return "";
-  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
-}
-function isoToDayKey(iso) {
-  const dt = parseYmdToDate(iso);
-  if (!dt) return "mon";
-  const dow = dt.getDay();
-  const map = { 1: "mon", 2: "tue", 3: "wed", 4: "thu", 5: "fri" };
-  return map[dow] || "mon";
-}
-function dayLabelByKey(k) {
-  const map = { mon: "월", tue: "화", wed: "수", thu: "목", fri: "금" };
-  return map[k] || "월";
-}
-
-/* calendar */
-const resDateIso = ref("");
-watch(
-  () => activeYmd.value,
-  (v) => {
-    if (!resDateIso.value) resDateIso.value = normIsoDate(v) || "";
-  },
-  { immediate: true }
-);
-watch(
-  () => props.selectedPersonId,
-  () => {
-    resDateIso.value = normIsoDate(activeYmd.value) || resDateIso.value || "";
-  }
-);
-const resDayKey = computed(() => isoToDayKey(resDateIso.value || normIsoDate(activeYmd.value) || ""));
 
 /* routes */
 const routes = computed(() => store.state.public.routes || {});
@@ -474,16 +222,13 @@ const pickedPerson = computed(() => {
   return people.value.find((x) => String(x?.id || "").trim() === pid) || null;
 });
 
-/** ✅ 여기만 수정: "즉시 Firestore 저장"은 store.scheduleSave()로 강제 flush */
+/** 즉시 저장 */
 async function tryPersistPublicImmediate() {
   try {
     if (typeof store.scheduleSave === "function") {
-      await store.scheduleSave(); // ✅ public/admin flush (즉시 setDoc)
+      await store.scheduleSave();
     }
   } catch (e) {}
-}
-async function commitReservationsImmediate() {
-  await tryPersistPublicImmediate();
 }
 
 /* name edit */
@@ -503,6 +248,7 @@ watch(
     if (!cur || cur === next) editName.value = next;
   }
 );
+
 async function commitName() {
   const pid = safeStr(props.selectedPersonId).trim();
   if (!pid) return;
@@ -537,7 +283,6 @@ async function commitName() {
 /* assign */
 function pickedAssign(dKeyRaw) {
   const dKey = dayKeyNorm(dKeyRaw);
-
   const a = pickedPerson.value?.assign?.[dKey];
   if (!a || typeof a !== "object") {
     return { pickupPlace: "", pickupTime: "", dropoffPlace: "", dropoffTime: "" };
@@ -590,256 +335,26 @@ async function onChangeAssignPlace(dayKeyRaw, type, nextPlaceRaw) {
   await tryPersistPublicImmediate();
 }
 
-/* reservations: 결석 완전 제외 */
-const reservations = computed(() => (Array.isArray(store.state.public.reservations) ? store.state.public.reservations : []));
-function isAbsentReservation(r) {
-  const rr = safeStr(r?.reason).trim();
-  const kk = safeStr(r?.kind).trim();
-  return rr === "absent" || kk === "결석" || !!r?.absent;
-}
-const reservationsForDay = computed(() => {
-  const iso = normIsoDate(resDateIso.value) || normIsoDate(activeYmd.value);
-  if (!iso) return [];
-  return reservations.value.filter((r) => normIsoDate(safeStr(r?.date)) === iso && !isAbsentReservation(r));
-});
-const reservationsForDayFiltered = computed(() => {
+/* ✅ 삭제 */
+async function removeSelectedPerson() {
   const pid = safeStr(props.selectedPersonId).trim();
-  if (!pid) return reservationsForDay.value;
-  return reservationsForDay.value.filter((r) => safeStr(r?.personId).trim() === pid);
-});
+  if (!pid) return;
 
-/* group read */
-const reservationsByPersonFiltered = computed(() => {
-  const map = {};
-  for (const r of reservationsForDay.value) {
-    const pid = safeStr(r?.personId).trim();
-    if (!pid) continue;
+  // people에서 삭제
+  const idx = store.state.public.people.findIndex((p) => String(p?.id || "").trim() === pid);
+  if (idx >= 0) store.state.public.people.splice(idx, 1);
 
-    const kind = safeStr(r?.kind) || safeStr(r?.reason) || "예약";
-    const type = safeStr(r?.type) || (safeStr(r?.pickupPlace) ? "pickup" : "dropoff");
-    const time = safeStr(r?.time) || "—";
-    const place =
-      safeStr(r?.place) ||
-      (type === "pickup" ? safeStr(r?.pickupPlace) : safeStr(r?.dropoffPlace)) ||
-      "—";
-
-    if (!map[pid]) map[pid] = [];
-    map[pid].push({ kind, type, time, place });
-  }
-  return map;
-});
-const tempReservations = computed(() => {
-  const out = [];
-  for (const r of reservationsForDay.value) {
-    const pid = safeStr(r?.personId).trim();
-    if (pid) continue;
-
-    const tempName = safeStr(r?.tempName).trim();
-    const kind = safeStr(r?.kind) || safeStr(r?.reason) || "체험";
-    const type = safeStr(r?.type) || "pickup";
-    const time = safeStr(r?.time) || "—";
-    const place = safeStr(r?.place) || "—";
-
-    out.push({ tempName, kind, type, time, place });
-  }
-  return out;
-});
-function personNameById(pid) {
-  const id = String(pid || "");
-  const p = people.value.find((x) => String(x?.id || "") === id);
-  return safeStr(p?.name).trim() || "(알 수 없음)";
-}
-
-/* normalize dual */
-function normalizeReason(r) {
-  const rr = safeStr(r?.reason).trim();
-  if (rr === "supplement" || rr === "timeChange" || rr === "custom") return rr;
-  const k = safeStr(r?.kind).trim();
-  if (k === "시간변경") return "timeChange";
-  if (k === "보강") return "supplement";
-  if (k) return "custom";
-  return "supplement";
-}
-function normalizeText(r) {
-  return safeStr(r?.text).trim() || safeStr(r?.customText).trim() || "";
-}
-function normalizePickupPlace(r) {
-  return safeStr(r?.pickupPlace).trim() || "";
-}
-function normalizeDropoffPlace(r) {
-  return safeStr(r?.dropoffPlace).trim() || "";
-}
-function normalizePickupTime(r) {
-  return safeStr(r?.pickupTime).trim() || "";
-}
-function normalizeDropoffTime(r) {
-  return safeStr(r?.dropoffTime).trim() || "";
-}
-
-/* add dual */
-const raReason = ref("supplement"); // supplement | timeChange | custom | absent
-const raPickupPlace = ref("");
-const raDropoffPlace = ref("");
-const raPickupTime = ref("");
-const raDropoffTime = ref("");
-const raText = ref("");
-
-const pickupPlaceOptions = computed(() => placeOptionsByDay(resDayKey.value, "pickup"));
-const dropoffPlaceOptions = computed(() => placeOptionsByDay(resDayKey.value, "dropoff"));
-
-function syncAddTimes() {
-  raPickupTime.value = raPickupPlace.value ? lookupRouteTime(resDayKey.value, "pickup", raPickupPlace.value) : "";
-  raDropoffTime.value = raDropoffPlace.value ? lookupRouteTime(resDayKey.value, "dropoff", raDropoffPlace.value) : "";
-}
-
-watch(
-  () => raReason.value,
-  () => {
-    raPickupPlace.value = "";
-    raDropoffPlace.value = "";
-    raPickupTime.value = "";
-    raDropoffTime.value = "";
-    raText.value = "";
-  }
-);
-watch(
-  () => resDateIso.value,
-  () => {
-    raPickupPlace.value = "";
-    raDropoffPlace.value = "";
-    raPickupTime.value = "";
-    raDropoffTime.value = "";
-  }
-);
-
-function ensureReservationsArray() {
-  if (!Array.isArray(store.state.public.reservations)) store.state.public.reservations = [];
-}
-function genResId() {
-  const r = Math.random().toString(16).slice(2, 8);
-  const t = Date.now().toString(36);
-  return `res-${t}-${r}`;
-}
-
-async function addReservationDual() {
-  const pid = safeStr(props.selectedPersonId).trim();
-  const dateIso = normIsoDate(resDateIso.value);
-  if (!pid || !dateIso) return;
-
-  if (raReason.value === "absent") return;
-
-  const puPlace = safeStr(raPickupPlace.value).trim();
-  const doPlace = safeStr(raDropoffPlace.value).trim();
-  if (!puPlace && !doPlace) return;
-
-  const puTime = puPlace ? lookupRouteTime(resDayKey.value, "pickup", puPlace) : "";
-  const doTime = doPlace ? lookupRouteTime(resDayKey.value, "dropoff", doPlace) : "";
-
-  const labelMap = {
-    supplement: "보강",
-    timeChange: "시간변경",
-    custom: "사용자 텍스트 저장",
-  };
-
-  ensureReservationsArray();
-  store.state.public.reservations.push({
-    id: genResId(),
-    date: dateIso,
-    personId: pid,
-    reason: raReason.value,
-    kind: labelMap[raReason.value] || "보강",
-    pickupPlace: puPlace,
-    pickupTime: puTime,
-    dropoffPlace: doPlace,
-    dropoffTime: doTime,
-    text: raReason.value === "custom" ? safeStr(raText.value).trim() : "",
-  });
-
-  raPickupPlace.value = "";
-  raDropoffPlace.value = "";
-  raPickupTime.value = "";
-  raDropoffTime.value = "";
-  raText.value = "";
-
-  await commitReservationsImmediate();
-}
-
-function findNthReservationIndexInStore(filteredIdx) {
-  const pid = safeStr(props.selectedPersonId).trim();
-  const dateIso = normIsoDate(resDateIso.value);
-  if (!pid || !dateIso) return -1;
-
-  let count = -1;
-  for (let i = 0; i < reservations.value.length; i++) {
-    const r = reservations.value[i];
-    if (isAbsentReservation(r)) continue;
-    if (normIsoDate(safeStr(r?.date)) !== dateIso) continue;
-    if (safeStr(r?.personId).trim() !== pid) continue;
-    count++;
-    if (count === filteredIdx) return i;
-  }
-  return -1;
-}
-
-async function updateReservationDualField(filteredIdx, field, valRaw) {
-  const realIdx = findNthReservationIndexInStore(filteredIdx);
-  if (realIdx < 0) return;
-
-  const cur = store.state.public.reservations[realIdx] || {};
-  const key = String(field || "");
-
-  if (key === "reason") {
-    const next = valRaw === "timeChange" || valRaw === "custom" ? valRaw : "supplement";
-    const labelMap = {
-      supplement: "보강",
-      timeChange: "시간변경",
-      custom: "사용자 텍스트 저장",
-    };
-
-    store.state.public.reservations[realIdx] = {
-      ...cur,
-      reason: next,
-      kind: labelMap[next] || "보강",
-      text: next === "custom" ? normalizeText(cur) : "",
-    };
-
-    await commitReservationsImmediate();
-    return;
+  // 혹시 reservations가 남아있으면 같이 정리(데이터 찌꺼기 방지)
+  if (Array.isArray(store.state.public.reservations)) {
+    store.state.public.reservations = store.state.public.reservations.filter(
+      (r) => safeStr(r?.personId).trim() !== pid
+    );
   }
 
-  if (key === "text") {
-    store.state.public.reservations[realIdx] = { ...cur, text: safeStr(valRaw).trim() };
-    return;
-  }
+  await tryPersistPublicImmediate();
 
-  store.state.public.reservations[realIdx] = { ...cur, [key]: valRaw };
-  await commitReservationsImmediate();
-}
-
-async function updateReservationDualPlace(filteredIdx, which, nextPlaceRaw) {
-  const realIdx = findNthReservationIndexInStore(filteredIdx);
-  if (realIdx < 0) return;
-
-  const cur = store.state.public.reservations[realIdx] || {};
-  const nextPlace = safeStr(nextPlaceRaw).trim();
-
-  if (which === "pickup") {
-    const t = nextPlace ? lookupRouteTime(resDayKey.value, "pickup", nextPlace) : "";
-    store.state.public.reservations[realIdx] = { ...cur, pickupPlace: nextPlace, pickupTime: t };
-  } else {
-    const t = nextPlace ? lookupRouteTime(resDayKey.value, "dropoff", nextPlace) : "";
-    store.state.public.reservations[realIdx] = { ...cur, dropoffPlace: nextPlace, dropoffTime: t };
-  }
-
-  await commitReservationsImmediate();
-}
-
-async function removeReservation(filteredIdx) {
-  const realIdx = findNthReservationIndexInStore(filteredIdx);
-  if (realIdx < 0) return;
-
-  store.state.public.reservations.splice(realIdx, 1);
-  await commitReservationsImmediate();
+  editName.value = "";
+  emit("deleted-person", { personId: pid });
 }
 </script>
 
@@ -867,12 +382,6 @@ async function removeReservation(filteredIdx) {
   line-height: 1.5;
   margin-top: 6px;
 }
-.minihelp2 {
-  margin-top: 8px;
-  font-size: 12px;
-  opacity: 0.65;
-  line-height: 1.5;
-}
 
 .subhead {
   font-size: 12px;
@@ -887,21 +396,20 @@ async function removeReservation(filteredIdx) {
   background: rgba(255, 255, 255, 0.08);
   margin: 14px 0;
 }
-.sep2 {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.08);
-  margin: 12px 0;
-}
 .emptymini {
   font-size: 12px;
   opacity: 0.55;
   padding: 10px 0 0;
 }
 
-/* 이름 */
+/* 이름 + 삭제 */
 .namebar {
   margin-bottom: 12px;
   max-width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
 }
 .nameinput {
   width: 100%;
@@ -919,6 +427,20 @@ async function removeReservation(filteredIdx) {
 .nameinput:focus {
   border-color: rgba(108, 255, 192, 0.22);
   box-shadow: 0 0 0 3px rgba(108, 255, 192, 0.08);
+}
+.btndelperson {
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 120, 120, 0.10);
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 1000;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btndelperson:active {
+  transform: translateY(1px);
 }
 
 /* 요일 카드 */
@@ -1038,180 +560,5 @@ async function removeReservation(filteredIdx) {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* 예약 */
-.resbox {
-  display: grid;
-  gap: 10px;
-}
-.kv {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-.kv:first-of-type {
-  border-top: 0;
-}
-.kv .k {
-  opacity: 0.7;
-  font-weight: 900;
-}
-.kv .v {
-  font-weight: 1000;
-}
-
-.topbar {
-  display: grid;
-  gap: 10px;
-  padding: 10px;
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.12);
-}
-.toprow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-.dateInp {
-  height: 34px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(0, 0, 0, 0.55);
-  color: rgba(255, 255, 255, 0.92);
-  padding: 0 10px;
-  outline: none;
-  font-weight: 1000;
-  color-scheme: dark;
-}
-.daypill {
-  height: 34px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  background: rgba(255, 255, 255, 0.06);
-  display: inline-flex;
-  align-items: center;
-  font-weight: 1000;
-  white-space: nowrap;
-}
-.absentNote {
-  font-size: 12px;
-  opacity: 0.7;
-  padding: 10px;
-  border-radius: 16px;
-  border: 1px dashed rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.resAddDual {
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.12);
-  padding: 10px;
-  overflow: hidden;
-}
-.dualrow {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.dualrow.actions {
-  grid-template-columns: 1fr;
-  margin-bottom: 0;
-  justify-items: end;
-}
-@media (max-width: 720px) {
-  .dualrow {
-    grid-template-columns: 1fr;
-  }
-}
-.cell {
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.08);
-  padding: 10px;
-  overflow: hidden;
-}
-.cell.full {
-  grid-column: 1 / -1;
-}
-.lab {
-  font-size: 12px;
-  font-weight: 1000;
-  opacity: 0.9;
-  margin-bottom: 8px;
-}
-
-.selDark,
-.inpDark {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  height: 34px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(0, 0, 0, 0.55);
-  color: rgba(255, 255, 255, 0.92);
-  padding: 0 10px;
-  outline: none;
-  font-weight: 1000;
-  color-scheme: dark;
-}
-
-.timePill {
-  margin-top: 8px;
-  height: 34px;
-  padding: 0 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  background: rgba(255, 255, 255, 0.06);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 1000;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.btnAdd,
-.btnDel {
-  min-width: 64px;
-  height: 34px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.9);
-  font-weight: 1000;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.btnAdd:active,
-.btnDel:active {
-  transform: translateY(1px);
-}
-
-.resEditList {
-  display: grid;
-  gap: 10px;
-}
-.resEditRowDual {
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.12);
-  padding: 10px;
-  overflow: hidden;
-}
-.rowTop {
-  display: flex;
-  gap: 10px;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
 }
 </style>

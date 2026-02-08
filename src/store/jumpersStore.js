@@ -18,6 +18,9 @@
 //
 // ✅ (이번 수정 포인트)
 //    - 차량목록: names가 0인 라인은 로드(표시)하지 않음
+//
+// ✅ (이번 수정)
+//    - 테스트용 날짜 오프셋 제거: 오늘 기준(0일)로 복귀
 
 import { computed, reactive, ref, watch } from "vue";
 import { db } from "@/firebase";
@@ -100,10 +103,23 @@ function makeLineKey(type, dayKey, stopId) {
  *  ========================= */
 function reasonLabel(r) {
   const rr = safeStr(r?.reason).trim();
+
+  // ✅ 결석
+  if (rr === "absent") return "결석";
+
+  // ✅ 보강/시간변경
   if (rr === "supplement") return "보강";
   if (rr === "timeChange") return "시간변경";
-  if (rr === "custom") return "사용자";
-  if (rr === "absent") return "결석";
+
+  // ✅ 사용자 텍스트는 입력한 내용 그대로 라벨로
+  if (rr === "custom") {
+    const t =
+      safeStr(r?.customText).trim() ||
+      safeStr(r?.reasonText).trim() ||
+      safeStr(r?.kindText).trim() ||
+      safeStr(r?.kind).trim();
+    return t || "사용자텍스트";
+  }
 
   const k = safeStr(r?.kind).trim();
   if (k) return k;
@@ -250,8 +266,16 @@ function reservationDisplayName(r, peopleById) {
 }
 
 function buildFinalNamesByPlaceFromReservations(reservations, ymd, dk, people) {
-  const { outByPlace: basePickupByPlace, baseByPerson: basePickupByPerson } = buildRosterMaps(people, dk, "pickup");
-  const { outByPlace: baseDropoffByPlace, baseByPerson: baseDropoffByPerson } = buildRosterMaps(people, dk, "dropoff");
+  const { outByPlace: basePickupByPlace, baseByPerson: basePickupByPerson } = buildRosterMaps(
+    people,
+    dk,
+    "pickup"
+  );
+  const { outByPlace: baseDropoffByPlace, baseByPerson: baseDropoffByPerson } = buildRosterMaps(
+    people,
+    dk,
+    "dropoff"
+  );
 
   const finalPickup = new Map();
   const finalDropoff = new Map();
@@ -476,6 +500,115 @@ export function useAppStore() {
     await Promise.all([flushPublicSave(), flushAdminSave()]);
   }
 
+  /** ✅ (추가) people 빠른추가 */
+  function genPersonId() {
+    return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  async function addPersonQuick(nameRaw) {
+    const nm = safeStr(nameRaw).trim().replace(/\s+/g, " ");
+    if (!nm) return "";
+
+    if (state.loadingPublic) return "";
+    if (applyingPublic.value) return "";
+
+    const existing = safeArr(state.public.people).find((p) => safeStr(p?.name).trim() === nm);
+    if (existing?.id) return safeStr(existing.id);
+
+    const id = genPersonId();
+    const nextPeople = [...safeArr(state.public.people), { id, name: nm, assign: {} }];
+    state.public.people = nextPeople;
+    schedulePublicSave();
+    return id;
+  }
+
+  /** ✅ (추가) reservations 추가/삭제 */
+  function genReservationId() {
+    return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function normalizeReasonToCode(reasonTypeRaw) {
+    const t = safeStr(reasonTypeRaw).trim();
+    if (t === "보강") return "supplement";
+    if (t === "시간변경") return "timeChange";
+    if (t === "사용자텍스트지정") return "custom";
+    if (t === "결석") return "absent";
+    return "";
+  }
+
+  function addReservation(payloadRaw) {
+    if (state.loadingPublic) return "";
+    if (applyingPublic.value) return "";
+
+    const payload = payloadRaw && typeof payloadRaw === "object" ? payloadRaw : {};
+    const date = safeStr(payload.date).trim();
+    if (!date) return "";
+
+    if (isPastYmd(date, todayYmd.value)) return "";
+
+    const id = genReservationId();
+
+    const reasonType = safeStr(payload.reasonType).trim();
+    const reasonText = safeStr(payload.reasonText).trim();
+
+    const isTrial = reasonType === "체험";
+    const isAbsent = reasonType === "결석";
+
+    const personId = isTrial ? "" : safeStr(payload.personId).trim();
+    const tempName = isTrial ? safeStr(payload.tempName).trim() : "";
+
+    const pu = payload.pickup && typeof payload.pickup === "object" ? payload.pickup : null;
+    const dof = payload.dropoff && typeof payload.dropoff === "object" ? payload.dropoff : null;
+
+    const pickupPlace = safeStr(pu?.place).trim();
+    const dropoffPlace = safeStr(dof?.place).trim();
+
+    const next = {
+      id,
+      date,
+
+      kind: isTrial ? "체험" : isAbsent ? "결석" : "",
+      reason: normalizeReasonToCode(reasonType),
+      kindText: reasonType,
+
+      personId,
+      tempName,
+
+      pickupPlace,
+      dropoffPlace,
+
+      pickupTime: safeStr(pu?.time).trim(),
+      dropoffTime: safeStr(dof?.time).trim(),
+
+      customText: reasonType === "사용자텍스트지정" ? reasonText : "",
+
+      createdAt: Date.now(),
+    };
+
+    if (isAbsent && !personId) return "";
+    if (!isAbsent && !pickupPlace && !dropoffPlace) return "";
+
+    state.public.reservations = [...safeArr(state.public.reservations), next];
+    schedulePublicSave();
+
+    return id;
+  }
+
+  function deleteReservation(reservationIdRaw) {
+    const rid = safeStr(reservationIdRaw).trim();
+    if (!rid) return false;
+    if (state.loadingPublic) return false;
+    if (applyingPublic.value) return false;
+
+    const list = safeArr(state.public.reservations);
+    const next = list.filter((r) => safeStr(r?.id).trim() !== rid);
+    if (next.length === list.length) return false;
+
+    state.public.reservations = next;
+    schedulePublicSave();
+    return true;
+  }
+
   /** clock */
   const kstNow = ref(nowKstDate());
   let clockTimer = null;
@@ -492,7 +625,9 @@ export function useAppStore() {
   }
 
   /** Home 기준 */
-  const homeOffsetDays = ref(1);
+  // ✅ 테스트용(1) -> 표준: 오늘(0)
+  const homeOffsetDays = ref(0);
+
   const homeDate = computed(() => addKstDays(kstNow.value, homeOffsetDays.value));
   const todayKey = computed(() => kstDayKey(homeDate.value));
   const todayYmd = computed(() => kstYmd(homeDate.value));
@@ -710,6 +845,13 @@ export function useAppStore() {
     toggleDone,
 
     scheduleSave,
+
+    // ✅ export
+    addPersonQuick,
+
+    // ✅ reservation API
+    addReservation,
+    deleteReservation,
   };
 
   return _store;

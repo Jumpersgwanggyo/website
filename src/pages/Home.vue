@@ -5,7 +5,7 @@
       <header class="card-head">
         <!-- ✅ 왼쪽: 타이틀 + 날짜 -->
         <div class="head-left">
-          <h2 class="h2">오늘의 차량 일정</h2>
+          <h2 class="h2">차량 일정</h2>
           <p class="hint">{{ headerDate }}</p>
         </div>
 

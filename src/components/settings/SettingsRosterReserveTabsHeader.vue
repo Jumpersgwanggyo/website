@@ -8,7 +8,7 @@
         :class="{ on: modelValue === 'roster' }"
         @click="emit('update:modelValue', 'roster')"
       >
-        명단
+        명단상세
       </button>
 
       <button
@@ -17,7 +17,7 @@
         :class="{ on: modelValue === 'trial' }"
         @click="emit('update:modelValue', 'trial')"
       >
-        체험
+        예약
       </button>
     </div>
 

@@ -4,8 +4,7 @@
       <div class="brand">
         <div class="logo">J</div>
         <div class="brand-text">
-          <h1 class="title">차량 시간표 관리</h1>
-          <p class="sub">더미 데이터 · 로컬 저장 · 레이아웃 우선</p>
+          <h1 class="title">점퍼즈 차량시간표</h1>
         </div>
       </div>
 

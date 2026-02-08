@@ -20,6 +20,22 @@
         <button v-if="q" class="clear" type="button" @click="q = ''">지우기</button>
       </div>
 
+      <!-- ✅ 빠른추가 -->
+      <div class="quickadd">
+        <input
+          class="search"
+          type="text"
+          v-model="newName"
+          placeholder="새 명단 이름 빠른추가…"
+          autocomplete="off"
+          @keydown.enter.prevent="quickAdd"
+        />
+        <button class="addbtn" type="button" @click="quickAdd" :disabled="!canQuickAdd">
+          추가
+        </button>
+      </div>
+      <div v-if="quickAddMsg" class="minihelp">{{ quickAddMsg }}</div>
+
       <!-- 이름 리스트 (이름만) -->
       <div class="subgroup">
         <div class="subtag pickup">이름 목록</div>
@@ -96,6 +112,15 @@ const nameToId = computed(() => {
 });
 
 const q = ref("");
+
+// ✅ 빠른추가 상태
+const newName = ref("");
+const quickAddMsg = ref("");
+
+const canQuickAdd = computed(() => {
+  const nm = safeStr(newName.value).trim();
+  return !!nm && !isLoading.value;
+});
 
 // ----- 한글 자모/초성 매칭 -----
 const CHO = ["ㄱ","ㄲ","ㄴ","ㄷ","ㄸ","ㄹ","ㅁ","ㅂ","ㅃ","ㅅ","ㅆ","ㅇ","ㅈ","ㅉ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ"];
@@ -183,6 +208,41 @@ function selectByName(name) {
 
   emit("select-person", { personId: pid, name: nm });
 }
+
+/** ✅ 빠른추가: 없으면 생성, 있으면 바로 선택 */
+async function quickAdd() {
+  quickAddMsg.value = "";
+
+  const nm = safeStr(newName.value).trim().replace(/\s+/g, " ");
+  if (!nm) return;
+
+  // 이미 있으면: 그 사람 선택
+  const existsId = nameToId.value.get(nm);
+  if (existsId) {
+    q.value = nm;
+    emit("select-person", { personId: existsId, name: nm });
+    quickAddMsg.value = "이미 있는 이름이라 바로 선택했어요.";
+    newName.value = "";
+    return;
+  }
+
+  // 신규 추가
+  if (typeof store.addPersonQuick !== "function") {
+    quickAddMsg.value = "추가 함수가 아직 store에 없어요. jumpersStore.js 수정이 필요해요.";
+    return;
+  }
+
+  const id = await store.addPersonQuick(nm);
+  if (!id) {
+    quickAddMsg.value = "추가에 실패했어요. (이름 중복/유효성/저장 오류 확인)";
+    return;
+  }
+
+  q.value = nm;
+  emit("select-person", { personId: id, name: nm });
+  quickAddMsg.value = "추가 완료! 바로 선택했어요.";
+  newName.value = "";
+}
 </script>
 
 <style scoped>
@@ -263,6 +323,38 @@ function selectByName(name) {
   cursor: pointer;
 }
 .clear:active {
+  transform: translateY(1px);
+}
+
+/* ✅ 빠른추가 바 */
+.quickadd {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: -6px 0 12px;
+}
+
+.addbtn {
+  height: 40px;
+  max-width: 100%;
+  white-space: nowrap;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(108, 255, 192, 0.08);
+  color: inherit;
+  font-weight: 1000;
+  cursor: pointer;
+}
+.addbtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.addbtn:active:not(:disabled) {
   transform: translateY(1px);
 }
 

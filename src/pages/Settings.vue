@@ -3,13 +3,7 @@
   <section class="layout">
     <header class="head">
       <div>
-        <h2 class="h2">설정(레이아웃 먼저)</h2>
-        <p class="hint">실시간 구독 ON · public/done 동기화</p>
-      </div>
-
-      <div class="actions">
-        <button class="btn" @click="store.scheduleSave?.()">로컬 저장</button>
-        <button class="btn danger" @click="store.resetToDummy?.()">더미로 초기화</button>
+        <h2 class="h2">설정</h2>
       </div>
     </header>
 
