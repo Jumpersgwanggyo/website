@@ -178,6 +178,27 @@ function deepCloneStops(arr) {
   return arr.map((s) => ({ ...s }));
 }
 
+/** ✅ 시간 정렬 유틸 */
+function toSortTime(t) {
+  const s = String(t || "").trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return "99:99";
+  const hh = String(Math.min(99, Math.max(0, parseInt(m[1], 10) || 0))).padStart(2, "0");
+  const mm = String(Math.min(59, Math.max(0, parseInt(m[2], 10) || 0))).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+function sortStopsByTime(stops) {
+  return [...stops].sort((a, b) => {
+    const at = toSortTime(a?.time);
+    const bt = toSortTime(b?.time);
+    const c = at.localeCompare(bt);
+    if (c !== 0) return c;
+    const ap = String(a?.place || "");
+    const bp = String(b?.place || "");
+    return ap.localeCompare(bp);
+  });
+}
+
 /** ✅ 드래프트 + 스냅샷 */
 const draftPickup = ref([]);
 const draftDropoff = ref([]);
@@ -324,13 +345,17 @@ function commitIfChanged() {
 
   ensureDayObj(selectedDay.value);
 
-  const pu = draftPickup.value.map((s) => ({
+  // ✅ 시간 기준 정렬 적용 (저장 시점에만)
+  const puSortedDraft = sortStopsByTime(draftPickup.value);
+  const doSortedDraft = sortStopsByTime(draftDropoff.value);
+
+  const pu = puSortedDraft.map((s) => ({
     id: (s.id ?? "").toString() || genStopId("pickup", selectedDay.value),
     time: (s.time ?? "").toString(),
     place: (s.place ?? "").toString(),
   }));
 
-  const dof = draftDropoff.value.map((s) => ({
+  const dof = doSortedDraft.map((s) => ({
     id: (s.id ?? "").toString() || genStopId("dropoff", selectedDay.value),
     time: (s.time ?? "").toString(),
     place: (s.place ?? "").toString(),
@@ -338,6 +363,10 @@ function commitIfChanged() {
 
   store.state.public.routes[selectedDay.value].pickup = pu;
   store.state.public.routes[selectedDay.value].dropoff = dof;
+
+  // ✅ UI도 정렬된 상태로 맞춤 (저장 후에만 재배열)
+  draftPickup.value = deepCloneStops(normalizeStops(pu));
+  draftDropoff.value = deepCloneStops(normalizeStops(dof));
 
   snapPickup.value = deepCloneStops(normalizeStops(pu));
   snapDropoff.value = deepCloneStops(normalizeStops(dof));
